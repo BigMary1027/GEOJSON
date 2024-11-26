@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoJSON Uploader and Editor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <style>
+        #map {
+            height: 500px;
+        }
+        #mapStyles {
+            position: absolute;
+            top: 10px;
+            right: 5px;
+            z-index: 1000;
+            background: white;
+            padding: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+<h3 style="font-size: 15px;">GeoJSON 文件上传与编辑</h3>
+<!-- 使用按钮代替文件输入 -->
+<button id="uploadGeojson">Upload GeoJSON File</button>
+<button id="saveGeojson" onclick="downloadGeoJSON()">Save GeoJSON</button>
+<div id="mapStyles">
+    <select id="styleSwitcher">
+        <option value="osm" >StreetMap</option>
+        <option value="satellite">Satellite</option>
+    </select>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+    // 初始化地图
+        let baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        });
+
+        const map = L.map('map', {
+            layers: [baseLayer]
+        }).setView([30.50, 114.30], 6);
+
+        // 添加其他底图选项
+        const layers = {
+            osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap contributors'
+            }),
+            satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 19,
+                attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012'
+            })
+        };
+
+    // 创建一个图层组用于加载和编辑 GeoJSON
+    const geojsonLayer = L.geoJSON().addTo(map);
+
+    // 添加 Leaflet.draw 控件
+    const drawControl = new L.Control.Draw({
+        edit: {
+            featureGroup: geojsonLayer, // 可编辑的图层
+            remove: true                // 允许删除图层
+        },
+        draw: {
+            polyline: true,
+            polygon: true,
+            rectangle: true,
+            circle: true,
+            marker: true
+        }
+    });
+    map.addControl(drawControl);
+
+    // 处理绘图完成事件
+    map.on(L.Draw.Event.CREATED, function (event) {
+        const layer = event.layer;
+        geojsonLayer.addLayer(layer);
+    });
+
+    // 切换底图样式
+    document.getElementById('styleSwitcher').addEventListener('change', function (event) {
+        const selectedStyle = event.target.value;
+        if (layers[selectedStyle]) {
+            map.eachLayer(function (layer) {
+                map.removeLayer(layer); // 移除当前底图
+            });
+            map.addLayer(layers[selectedStyle]); // 添加新底图
+            map.addLayer(geojsonLayer); // 保留 GeoJSON 图层
+        }
+    });
+
+    // 创建一个隐藏的文件输入元素
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.geojson';
+    fileInput.style.display = 'none';
+
+    // 触发文件选择框
+    document.getElementById('uploadGeojson').addEventListener('click', function () {
+        fileInput.click();
+    });
+
+    // 处理文件选择并加载 GeoJSON 数据
+    fileInput.addEventListener('change', function (event) {
+        const file = event.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                try {
+                    const geojsonData = JSON.parse(e.target.result); // 尝试解析文件
+                    geojsonLayer.clearLayers(); // 清除旧数据
+
+                    geojsonLayer.addData(geojsonData); // 加载新的 GeoJSON 数据
+
+                    // 验证数据范围
+                    const bounds = geojsonLayer.getBounds();
+
+                    if (bounds.isValid()) {
+                        map.fitBounds(bounds); // 自动适配 GeoJSON 范围
+                    } else {
+                        // 数据无效时设置默认中心点
+                        console.warn("Invalid GeoJSON bounds. Using default center.");
+                        map.setView([30.5, 114.3], 10);
+                    }
+
+                } catch (error) {
+                    console.error("Error loading GeoJSON:", error.message);
+                    alert("无效的 GeoJSON 文件！"); // 仅当数据无效时显示警告
+                }
+            };
+
+            reader.readAsText(file);
+        }
+    });
+
+    // 保存按钮处理
+<!--    document.getElementById('saveGeojson').addEventListener('click', function () {-->
+<!--        const geojsonData = geojsonLayer.toGeoJSON();-->
+<!--        const blob = new Blob([JSON.stringify(geojsonData, null, 2)], { type: 'application/json' });-->
+<!--        const url = URL.createObjectURL(blob);-->
+<!--        const a = document.createElement('a');-->
+<!--        a.href = url;-->
+<!--        a.download = 'edited-geojson.geojson';-->
+<!--        a.click();-->
+<!--        URL.revokeObjectURL(url);-->
+<!--    });-->
+    document.getElementById('saveGeojson').addEventListener('click', function () {
+        const geojsonData = geojsonLayer.toGeoJSON();
+        const geojsonString = JSON.stringify(geojsonData, null, 2);
+
+        // 调用 Android 方法
+        if (window.Android && typeof window.Android.saveGeoJSON === 'function') {
+            window.Android.saveGeoJSON(geojsonString);
+        } else {
+            console.error("Android interface is not available");
+        }
+    });
+
+    function downloadGeoJSON() {
+        if (geojsonData) {
+          // Call Android's saveGeoJSON method to save the data locally
+          Android.saveGeoJSON(JSON.stringify(geojsonData, null, 2));
+        } else {
+          alert('No GeoJSON data available to download!');
+        }
+      }
+</script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DXF to GeoJSON Converter</title>
+    <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 500px;
+            margin-top: 20px;
+            display: none;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        #progress-container {
+            display: none;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+<h1 style="font-size: 15px;">DXF to GeoJSON Converter</h1>
+
+<!-- 使用按钮代替文件输入 -->
+<button id="uploadButton">Upload DXF File</button>
+<button id="convert">Convert to GeoJSON</button>
+<button id="download" disabled onclick="downloadGeoJSON()" style="margin-top: 10px;">Download GeoJSON</button>
+
+<!-- 添加进度条 -->
+<div id="progress-container">
+    <label for="progressBar" style="font-size: 15px;">Conversion Progress:</label>
+    <progress id="progressBar" value="0" max="100" style="width: 100%;"></progress>
+</div>
+
+<h2 style="font-size: 13px;">Converted GeoJSON Data</h2>
+<pre id="geojsonDisplay">No data yet...</pre>
+
+<h2 style="display: none;">Map Preview</h2>
+<div id="map"></div>
+
+<script>
+    let geojsonData = null;
+
+    // Initialize the Leaflet map
+    const map = L.map('map').setView([30.50, 114.30], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    let geojsonLayer;
+
+    // Create a hidden file input element
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.dxf';
+    fileInput.style.display = 'none';
+
+    // Trigger file input when "Upload DXF File" button is clicked
+    document.getElementById('uploadButton').addEventListener('click', () => {
+        fileInput.click();
+    });
+
+    // Handle file selection
+    fileInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+
+            // Show the progress bar
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progressBar');
+            progressContainer.style.display = 'block';
+            progressBar.value = 0;
+
+            reader.onloadstart = function () {
+                progressBar.value = 0; // Reset progress
+            };
+
+            reader.onprogress = function (event) {
+                if (event.lengthComputable) {
+                    const percent = (event.loaded / event.total) * 100;
+                    progressBar.value = percent; // Update progress
+                }
+            };
+
+            reader.onload = function (event) {
+                progressBar.value = 100; // Complete progress
+                try {
+                    const dxfParser = new DxfParser();
+                    const dxfContent = event.target.result;
+                    const dxfData = dxfParser.parseSync(dxfContent);
+
+                    // Simple GeoJSON conversion
+                    geojsonData = {
+                        type: 'FeatureCollection',
+                        features: dxfData.entities.map(entity => ({
+                            type: 'Feature',
+                            properties: { layer: entity.layer },
+                            geometry: convertToGeoJSONGeometry(entity)
+                        })).filter(f => f.geometry) // Filter null geometries
+                    };
+
+                    // Display GeoJSON in the text area
+                    document.getElementById('geojsonDisplay').textContent = JSON.stringify(geojsonData, null, 2);
+
+                    // Add GeoJSON data to the map and auto-adjust view
+                    if (geojsonLayer) {
+                        geojsonLayer.remove();
+                    }
+                    geojsonLayer = L.geoJSON(geojsonData).addTo(map);
+
+                    // Force set the center and zoom level
+                    map.setView([30.50, 114.30], 13);
+
+                    // Auto adjust bounds
+                    const bounds = geojsonLayer.getBounds();
+                    if (bounds.isValid()) {
+                        map.fitBounds(bounds);
+                    } else {
+                        map.setView([30.50, 114.30], 13); // Invalid bounds, reset to default center
+                    }
+
+                    document.getElementById('download').disabled = false;
+                    progressContainer.style.display = 'none'; // Hide progress bar after conversion
+                } catch (error) {
+                    alert('Error parsing DXF file: ' + error.message);
+                }
+            };
+
+            reader.readAsText(file);
+        }
+    });
+
+    // Convert DXF entity to GeoJSON geometry
+    function convertToGeoJSONGeometry(entity) {
+      const scaleFactor = 0.001; // Assuming DXF uses millimeter units
+
+      if (entity.type === 'LINE') {
+          return {
+              type: 'LineString',
+              coordinates: [
+                  [entity.vertices[0].x * scaleFactor, entity.vertices[0].y * scaleFactor],
+                  [entity.vertices[1].x * scaleFactor, entity.vertices[1].y * scaleFactor]
+              ]
+          };
+      } else if (entity.type === 'POLYLINE') {
+          return {
+              type: 'LineString',
+              coordinates: entity.vertices.map(v => [v.x * scaleFactor, v.y * scaleFactor])
+          };
+      } else if (entity.type === 'CIRCLE') {
+          return {
+              type: 'Point',
+              coordinates: [entity.center.x * scaleFactor, entity.center.y * scaleFactor],
+              radius: entity.radius * scaleFactor // Radius stored as a property
+          };
+      } else if (entity.type === 'ARC') {
+          // Convert ARC to a set of points (approximation)
+          const points = [];
+          const steps = 32; // Number of points to approximate the arc
+          const startAngle = entity.startAngle;
+          const endAngle = entity.endAngle;
+          const radius = entity.radius * scaleFactor;
+
+          for (let i = 0; i <= steps; i++) {
+              const angle = startAngle + (endAngle - startAngle) * (i / steps);
+              const x = entity.center.x + radius * Math.cos(angle);
+              const y = entity.center.y + radius * Math.sin(angle);
+              points.push([x * scaleFactor, y * scaleFactor]);
+          }
+          return {
+              type: 'LineString',
+              coordinates: points
+          };
+      }
+
+      return null; // Ignore unsupported entities
+  }
+
+    // Download GeoJSON
+    function downloadGeoJSON() {
+        if (geojsonData) {
+            // Call Android's saveGeoJSON method to save the data locally
+            Android.saveGeoJSON(JSON.stringify(geojsonData, null, 2));
+        } else {
+            alert('No GeoJSON data available to download!');
+        }
+    }
+</script>
+</body>
+</html>
